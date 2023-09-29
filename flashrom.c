@@ -38,6 +38,8 @@
 
 static bool use_legacy_erase_path = false;
 
+int majority_vote = 1;
+
 const char flashrom_version[] = FLASHROM_VERSION;
 
 static const struct programmer_entry *programmer = NULL;
@@ -579,6 +581,18 @@ static read_func_t *lookup_read_func_ptr(const struct flashchip *chip)
 int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigned int len)
 {
 	unsigned int read_len;
+	int *counter = NULL;
+	uint8_t *votes = NULL;
+	unsigned int vote_buflen = 0;
+
+	if (majority_vote > 1) {
+	  counter = malloc (majority_vote * sizeof(int));
+	  if (!counter) {
+	    msg_gerr("%s: out of memory.\n", __func__);
+	    return -1;
+	  }
+
+	}
 	for (unsigned int addr = start; addr < start + len; addr += read_len) {
 		struct flash_region region;
 		get_flash_region(flash, addr, &region);
@@ -601,6 +615,8 @@ int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigne
 			msg_gerr("%s: cannot read inside %s region (%#08"PRIx32"..%#08"PRIx32").\n",
 				 __func__, region.name, region.start, region.end - 1);
 			free(region.name);
+			free(counter);
+			free(votes);
 			return -1;
 		}
 		msg_gdbg("%s: %s region (%#08"PRIx32"..%#08"PRIx32") is readable, reading range (%#08x..%#08x).\n",
@@ -608,13 +624,60 @@ int read_flash(struct flashctx *flash, uint8_t *buf, unsigned int start, unsigne
 		free(region.name);
 
 		read_func_t *read_func = lookup_read_func_ptr(flash->chip);
-		int ret = read_func(flash, rbuf, addr, read_len);
-		if (ret) {
-			msg_gerr("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
-			return -1;
+		if (majority_vote > 1) {
+			if (vote_buflen < read_len) {
+				free (votes);
+				votes = malloc (majority_vote * read_len);
+				if (!votes) {
+					msg_gerr("%s: out of memory.\n", __func__);
+					free (counter);
+					return -1;
+				}
+				vote_buflen = read_len;
+			}
+			for (int try = 0; try < majority_vote; try++) {
+				printf ("read try %d\n", try);
+				int ret = read_func(flash, votes + read_len * try, addr, read_len);
+				printf ("read try %d done\n", try);
+				if (ret) {
+					free (votes);
+					free(counter);
+					msg_gerr("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
+					return -1;
+				}
+			}
+			for (unsigned int offset = 0; offset < read_len; offset++) {
+				memset(counter, 0, sizeof(counter[0]) * majority_vote);
+				for (int candidate = 0; candidate < majority_vote; candidate++)
+					for (int k = 0; k < majority_vote; k++)
+						counter[candidate] += (votes[offset + candidate * read_len] == votes[offset + k * read_len]);
+				if (counter[0] != majority_vote)
+					printf("Correcting %#08x\n", addr + offset);
+				int winner = -1;
+				for (int candidate = 0; candidate < majority_vote; candidate++)
+					if (counter[candidate] > majority_vote / 2) {
+						winner = candidate;
+						break;
+					}
+				if (winner < 0) {
+					msg_gerr("%s: failed to correct (%#08x).\n", __func__, addr + offset);
+					free(counter);
+					free(votes);
+					return -1;
+				}
+				rbuf[offset] = votes[offset + winner * read_len];
+			}
+		} else {
+			int ret = read_func(flash, rbuf, addr, read_len);
+			if (ret) {
+				msg_gerr("%s: failed to read (%#08x..%#08x).\n", __func__, addr, addr + read_len - 1);
+				return -1;
+			}
 		}
-
 	}
+
+	free(votes);
+	free(counter);
 
 	return 0;
 }

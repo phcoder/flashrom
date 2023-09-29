@@ -45,6 +45,7 @@ enum {
 	OPTION_WP_DISABLE,
 	OPTION_WP_LIST,
 	OPTION_PROGRESS,
+	OPTION_MAJORITY_VOTE
 };
 
 struct cli_options {
@@ -77,6 +78,8 @@ struct cli_options {
 	char *referencefile;
 	const char *chip_to_probe;
 };
+
+extern int majority_vote;
 
 static void cli_classic_usage(const char *name)
 {
@@ -118,6 +121,7 @@ static void cli_classic_usage(const char *name)
 	       "      --fmap                        read ROM layout from fmap embedded in ROM\n"
 	       "      --fmap-file <fmapfile>        read ROM layout from fmap in <fmapfile>\n"
 	       "      --ifd                         read layout from an Intel Firmware Descriptor\n"
+	       "      --majority-vote <times>       repeat reads <times> and take majority vote. <times> must be odd\n"
 	       " -i | --include <region>[:<file>]   only read/write image <region> from layout\n"
 	       "                                    (optionally with data from <file>)\n"
 	       "      --image <region>[:<file>]     deprecated, please use --include\n"
@@ -714,6 +718,12 @@ static void parse_options(int argc, char **argv, const char *optstring,
 			if (register_include_arg(&options->include_args, optarg))
 				cli_classic_abort_usage(NULL);
 			break;
+		case OPTION_MAJORITY_VOTE:
+			majority_vote = strtoul(optarg, NULL, 0);
+			if (majority_vote < 1 || (majority_vote & 1) == 0)
+				cli_classic_abort_usage("Error: --majority-vote must be positive odd integer."
+							"Aborting.\n");
+			break;
 		case OPTION_FLASH_CONTENTS:
 			if (options->referencefile)
 				cli_classic_abort_usage("Error: --flash-contents specified more than once."
@@ -887,6 +897,7 @@ int main(int argc, char *argv[])
 		{"flash-contents",	1, NULL, OPTION_FLASH_CONTENTS},
 		{"flash-name",		0, NULL, OPTION_FLASH_NAME},
 		{"flash-size",		0, NULL, OPTION_FLASH_SIZE},
+		{"majority-vote",	1, NULL, OPTION_MAJORITY_VOTE},
 		{"get-size",		0, NULL, OPTION_FLASH_SIZE}, // (deprecated): back compatibility.
 		{"wp-status",		0, NULL, OPTION_WP_STATUS},
 		{"wp-list",		0, NULL, OPTION_WP_LIST},
